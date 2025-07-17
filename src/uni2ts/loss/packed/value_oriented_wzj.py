@@ -22,19 +22,23 @@ class PackedValueOrientedNLLLoss(PackedDistributionLoss):
         """Align mask dimensions with reference tensor."""
         if mask is None:
             return None
-        # Expand dims if needed
         while mask.dim() < ref.dim():
             mask = mask.unsqueeze(-1)
-        # Squeeze if too many dims (should not often happen, but for safety)
         while mask.dim() > ref.dim():
             mask = mask.squeeze(-1)
-        # Expand to shape if still not match
         if mask.shape != ref.shape:
             mask = mask.expand_as(ref)
         return mask
 
     def _loss_func(
-        self, pred, target, prediction_mask=None, observed_mask=None, **kwargs
+        self,
+        pred,
+        target,
+        prediction_mask=None,
+        observed_mask=None,
+        sample_id=None,
+        variate_id=None,
+        **kwargs
     ):
         # 负对数似然损失
         loss = -pred.log_prob(target)
