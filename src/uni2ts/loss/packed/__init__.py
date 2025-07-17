@@ -26,6 +26,9 @@ from .normalized import (
 from .percentage_error import PackedMAPELoss, PackedSMAPELoss
 from .point import PackedMAELoss, PackedMSELoss, PackedRMSELoss
 
+# wzj
+from .value_oriented_wzj import PackedValueOrientedMAELoss
+
 __all__ = [
     "PackedDistributionLoss",
     "PackedLoss",
@@ -42,4 +45,5 @@ __all__ = [
     "PackedRMSELoss",
     "PackedSMAPELoss",
     "PointNormType",
+    "PackedValueOrientedMAELoss",
 ]
