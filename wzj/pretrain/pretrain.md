@@ -31,3 +31,14 @@ python -m cli.train \
   trainer.max_epochs=1000 \
   train_dataloader.batch_size=256
 ```
+
+# PackedValueOrientedMAELoss 训练一个base的模型
+```python
+python -m cli.train \
+  -cp conf/pretrain \
+  run_name=moirai_base \
+  model=moirai_base_wzj_value_loss \
+  data=lotsa_v1_weighted \
+  trainer.max_epochs=1000 \
+  train_dataloader.batch_size=256
+```
