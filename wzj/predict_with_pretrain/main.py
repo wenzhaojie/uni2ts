@@ -39,7 +39,10 @@ test_data = test_template.generate_instances(
 
 # ========== 加载本地 Moirai 模型 ==========
 print(f"Loading local Moirai model from: {LOCAL_MODEL_CKPT}")
-module = MoiraiModule.from_pretrained(LOCAL_MODEL_CKPT)
+module = MoiraiModule.from_pretrained(
+    pretrained_model_name_or_path=LOCAL_MODEL_CKPT,
+    local_files_only=True,
+)
 model = MoiraiForecast(
     module=module,
     prediction_length=PDT,
