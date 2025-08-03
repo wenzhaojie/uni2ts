@@ -11,12 +11,16 @@ from gluonts.ev.metrics import BaseMetricDefinition, DirectMetric
 
 @dataclass
 class ValueOrientedNLLMetric(BaseMetricDefinition):
+    """
+    Value-oriented weighted NLL loss for evaluation,
+    with event region emphasis and smoothness penalty.
+    """
     event_weight: float = 2.0
     threshold_ratio: float = 0.8
     lambda_smooth: float = 0.1
     forecast_type: str = "mean"
 
-    def __call__(self, axis: Optional[int] = None) -> DirectMetric:
+    def __call__(self, axis: Optional[int] = 0) -> DirectMetric:
         return DirectMetric(
             name=f"ValueOrientedNLL[event_weight={self.event_weight},smooth={self.lambda_smooth}]",
             stat=partial(
@@ -26,7 +30,7 @@ class ValueOrientedNLLMetric(BaseMetricDefinition):
                 lambda_smooth=self.lambda_smooth,
                 forecast_type=self.forecast_type,
             ),
-            aggregate=Mean(axis=axis),
+            aggregate=Mean(axis=0),  # 强制聚合第0维，防止axis错
         )
 
 def value_oriented_nll_stat(
@@ -37,9 +41,10 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
+    # 只处理包含 label 和 forecast 的情况，否则直接返回 shape=(1,) 的 0.0
     if not (isinstance(data, dict) and "label" in data and "forecast" in data):
         print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
-        return np.array([0.0], dtype=np.float32)  # shape=(1,)
+        return np.zeros((1,), dtype=np.float32)
 
     y_true = data["label"]
     forecast = data["forecast"]
@@ -48,7 +53,7 @@ def value_oriented_nll_stat(
         y_true = torch.from_numpy(y_true)
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
-    elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):
+    elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):  # fallback
         class DummyDistr:
             def log_prob(self, x):
                 mean = torch.from_numpy(forecast.mean)
@@ -60,7 +65,7 @@ def value_oriented_nll_stat(
         distr = DummyDistr()
     else:
         print("[WARN] value_oriented_nll_stat: illegal forecast, return 0.0")
-        return np.array([0.0], dtype=np.float32)
+        return np.zeros((1,), dtype=np.float32)
 
     try:
         log_prob = distr.log_prob(y_true)
@@ -82,8 +87,8 @@ def value_oriented_nll_stat(
         result = total_loss.item() if hasattr(total_loss, "item") else float(total_loss)
         if np.isnan(result):
             print("[WARN] value_oriented_nll_stat: got nan, return 0.0")
-            return np.array([0.0], dtype=np.float32)
+            return np.zeros((1,), dtype=np.float32)
         return np.array([result], dtype=np.float32)
     except Exception as e:
         print(f"[ERROR] value_oriented_nll_stat: Exception {e}, return 0.0")
-        return np.array([0.0], dtype=np.float32)
+        return np.zeros((1,), dtype=np.float32)
