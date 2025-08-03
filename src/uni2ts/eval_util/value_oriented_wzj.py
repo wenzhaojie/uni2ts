@@ -38,12 +38,9 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
-    import collections
-    if isinstance(data, collections.ChainMap):
-        data = dict(data)
-    # ==== 适配所有主流输入 ====
+    # ChainMap 支持 dict-like 取值，不转 dict
     def print_illegal():
-        if isinstance(data, dict):
+        if isinstance(data, dict) or isinstance(data, collections.ChainMap):
             print("[DEBUG] illegal data keys:", list(data.keys()))
         else:
             print("[DEBUG] illegal data type:", type(data))
@@ -52,7 +49,8 @@ def value_oriented_nll_stat(
     y_true = None
     forecast = None
 
-    if isinstance(data, dict):
+    # 兼容不同key
+    if isinstance(data, dict) or isinstance(data, collections.ChainMap):
         if "label" in data:
             y_true = data["label"]
         elif "target" in data:
