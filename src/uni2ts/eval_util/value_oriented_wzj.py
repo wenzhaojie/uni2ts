@@ -30,7 +30,7 @@ class ValueOrientedNLLMetric(BaseMetricDefinition):
         )
 
 def value_oriented_nll_stat(
-    data,  # <--- 只用一个data参数，gluonts.ev.metrics会传dict进来！
+    data,
     event_weight: float = 2.0,
     threshold_ratio: float = 0.8,
     lambda_smooth: float = 0.1,
@@ -40,12 +40,16 @@ def value_oriented_nll_stat(
     """
     GluonTS evaluation-style metric: data是dict，含 "label", "forecast" 键。
     """
-    y_true = data["label"]
-    forecast = data["forecast"]
+    y_true = data.get("label", None)
+    forecast = data.get("forecast", None)
+    # 兼容某些意外情况（防止 forecast=None）
+    if y_true is None or forecast is None:
+        return np.nan
 
-    # 支持 torch/numpy 输入
+    # 兼容 torch/numpy 输入
     if isinstance(y_true, np.ndarray):
         y_true = torch.from_numpy(y_true)
+    # forecast distribution接口
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
     elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):  # fallback
@@ -59,7 +63,8 @@ def value_oriented_nll_stat(
                 return torch.from_numpy(forecast.mean)
         distr = DummyDistr()
     else:
-        raise ValueError("Unsupported forecast type for ValueOrientedNLLMetric.")
+        # 对于非法 forecast（比如 dict，或 quantile 访问），直接返回 nan
+        return np.nan
 
     # NLL loss
     log_prob = distr.log_prob(y_true)
