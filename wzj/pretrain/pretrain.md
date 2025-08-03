@@ -62,3 +62,15 @@ python -m cli.eval \
   model.context_length=1000 \
   data=etth1_test
 ```
+
+
+```python
+HYDRA_FULL_ERROR=1 python -m cli.eval \
+  run_name=example_base_moirai_small_wzj_value_loss \
+  model=moirai_base_wzj_value_loss \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=lsf_test \
+  data.dataset_name=ETTh1 \
+  data.prediction_length=96
+```
