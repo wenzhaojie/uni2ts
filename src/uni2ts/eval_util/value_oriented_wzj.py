@@ -11,10 +11,6 @@ from gluonts.ev.metrics import BaseMetricDefinition, DirectMetric
 
 @dataclass
 class ValueOrientedNLLMetric(BaseMetricDefinition):
-    """
-    Value-oriented weighted NLL loss for evaluation,
-    with event region emphasis and smoothness penalty.
-    """
     event_weight: float = 2.0
     threshold_ratio: float = 0.8
     lambda_smooth: float = 0.1
@@ -34,8 +30,7 @@ class ValueOrientedNLLMetric(BaseMetricDefinition):
         )
 
 def value_oriented_nll_stat(
-    y_true,
-    forecast,
+    data,  # <--- 只用一个data参数，gluonts.ev.metrics会传dict进来！
     event_weight: float = 2.0,
     threshold_ratio: float = 0.8,
     lambda_smooth: float = 0.1,
@@ -43,8 +38,11 @@ def value_oriented_nll_stat(
     **kwargs
 ):
     """
-    GluonTS evaluation-style metric: y_true, forecast (distribution object).
+    GluonTS evaluation-style metric: data是dict，含 "label", "forecast" 键。
     """
+    y_true = data["label"]
+    forecast = data["forecast"]
+
     # 支持 torch/numpy 输入
     if isinstance(y_true, np.ndarray):
         y_true = torch.from_numpy(y_true)
