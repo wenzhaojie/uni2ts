@@ -37,10 +37,9 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
-    # 只处理包含 label 和 forecast 的情况，否则直接返回 0.0
     if not (isinstance(data, dict) and "label" in data and "forecast" in data):
         print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
-        return 0.0
+        return np.array([0.0], dtype=np.float32)  # shape=(1,)
 
     y_true = data["label"]
     forecast = data["forecast"]
@@ -49,7 +48,7 @@ def value_oriented_nll_stat(
         y_true = torch.from_numpy(y_true)
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
-    elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):  # fallback
+    elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):
         class DummyDistr:
             def log_prob(self, x):
                 mean = torch.from_numpy(forecast.mean)
@@ -61,7 +60,7 @@ def value_oriented_nll_stat(
         distr = DummyDistr()
     else:
         print("[WARN] value_oriented_nll_stat: illegal forecast, return 0.0")
-        return 0.0
+        return np.array([0.0], dtype=np.float32)
 
     try:
         log_prob = distr.log_prob(y_true)
@@ -80,12 +79,11 @@ def value_oriented_nll_stat(
             smooth_loss = 0.0
 
         total_loss = weighted_loss.mean() + lambda_smooth * smooth_loss
-        # 统一 float 返回
         result = total_loss.item() if hasattr(total_loss, "item") else float(total_loss)
         if np.isnan(result):
             print("[WARN] value_oriented_nll_stat: got nan, return 0.0")
-            return 0.0
-        return result
+            return np.array([0.0], dtype=np.float32)
+        return np.array([result], dtype=np.float32)
     except Exception as e:
         print(f"[ERROR] value_oriented_nll_stat: Exception {e}, return 0.0")
-        return 0.0
+        return np.array([0.0], dtype=np.float32)
