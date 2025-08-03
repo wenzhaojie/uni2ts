@@ -38,13 +38,14 @@ def value_oriented_nll_stat(
     **kwargs
 ):
     """
-    GluonTS evaluation-style metric: data是dict，含 "label", "forecast" 键。
+    GluonTS evaluation-style metric: data 是 dict，含 "label"、"forecast" 键。否则直接 return np.nan。
     """
-    y_true = data.get("label", None)
-    forecast = data.get("forecast", None)
-    # 兼容某些意外情况（防止 forecast=None）
-    if y_true is None or forecast is None:
+    # 只处理包含 label 和 forecast 的情况，否则直接返回 nan
+    if not (isinstance(data, dict) and "label" in data and "forecast" in data):
         return np.nan
+
+    y_true = data["label"]
+    forecast = data["forecast"]
 
     # 兼容 torch/numpy 输入
     if isinstance(y_true, np.ndarray):
@@ -63,7 +64,6 @@ def value_oriented_nll_stat(
                 return torch.from_numpy(forecast.mean)
         distr = DummyDistr()
     else:
-        # 对于非法 forecast（比如 dict，或 quantile 访问），直接返回 nan
         return np.nan
 
     # NLL loss
@@ -84,6 +84,5 @@ def value_oriented_nll_stat(
     else:
         smooth_loss = 0.0
 
-    # Reduction
     total_loss = weighted_loss.mean() + lambda_smooth * smooth_loss
     return total_loss.item() if hasattr(total_loss, "item") else float(total_loss)
