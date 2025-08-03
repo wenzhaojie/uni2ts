@@ -1,5 +1,3 @@
-# uni2ts/eval_util/value_oriented_wzj.py
-
 from dataclasses import dataclass
 from functools import partial
 from typing import Optional
@@ -38,47 +36,41 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
-    # ChainMap 支持 dict-like 取值，不转 dict
-    def print_illegal():
-        if isinstance(data, dict) or isinstance(data, collections.ChainMap):
-            print("[DEBUG] illegal data keys:", list(data.keys()))
-        else:
-            print("[DEBUG] illegal data type:", type(data))
-        print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
+    import collections
+    # 只用主 dict
+    if isinstance(data, collections.ChainMap):
+        main_data = data.maps[0]
+    else:
+        main_data = data
 
     y_true = None
     forecast = None
 
-    # 兼容不同key
-    if isinstance(data, dict) or isinstance(data, collections.ChainMap):
-        if "label" in data:
-            y_true = data["label"]
-        elif "target" in data:
-            y_true = data["target"]
+    if "label" in main_data:
+        y_true = main_data["label"]
+    elif "target" in main_data:
+        y_true = main_data["target"]
 
-        if "forecast" in data:
-            forecast = data["forecast"]
-        elif "mean" in data:
-            class DummyDistr:
-                def log_prob(self, x):
-                    mean = torch.from_numpy(data["mean"]) if isinstance(data["mean"], np.ndarray) else torch.as_tensor(data["mean"])
-                    scale = torch.ones_like(mean)
-                    return -0.5 * ((x - mean) / scale) ** 2 - scale.log() - 0.5 * np.log(2 * np.pi)
-                @property
-                def mean(self):
-                    return torch.from_numpy(data["mean"]) if isinstance(data["mean"], np.ndarray) else torch.as_tensor(data["mean"])
-            forecast = type("DummyForecast", (), {"distribution": DummyDistr()})()
-        else:
-            forecast = None
+    if "forecast" in main_data:
+        forecast = main_data["forecast"]
+    elif "mean" in main_data:
+        # 构造 dummy forecast
+        class DummyDistr:
+            def log_prob(self, x):
+                mean = torch.from_numpy(main_data["mean"]) if isinstance(main_data["mean"], np.ndarray) else torch.as_tensor(main_data["mean"])
+                scale = torch.ones_like(mean)
+                return -0.5 * ((x - mean) / scale) ** 2 - scale.log() - 0.5 * np.log(2 * np.pi)
+            @property
+            def mean(self):
+                return torch.from_numpy(main_data["mean"]) if isinstance(main_data["mean"], np.ndarray) else torch.as_tensor(main_data["mean"])
+        forecast = type("DummyForecast", (), {"distribution": DummyDistr()})()
     else:
-        print_illegal()
-        return np.zeros((1,), dtype=np.float32)
+        forecast = None
 
     if y_true is None or forecast is None:
-        print_illegal()
+        print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
         return np.zeros((1,), dtype=np.float32)
 
-    # ==== 到这里，保证 y_true 和 forecast 有效 ====
     if isinstance(y_true, np.ndarray):
         y_true = torch.from_numpy(y_true)
     distr = None
@@ -96,7 +88,7 @@ def value_oriented_nll_stat(
         distr = DummyDistr2()
     else:
         print("[DEBUG] forecast has no valid distribution/mean/scale")
-        print_illegal()
+        print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
         return np.zeros((1,), dtype=np.float32)
 
     try:
