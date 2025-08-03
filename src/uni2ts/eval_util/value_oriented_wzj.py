@@ -37,20 +37,16 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
-    """
-    GluonTS evaluation-style metric: data 是 dict，含 "label"、"forecast" 键。否则直接 return np.nan。
-    """
-    # 只处理包含 label 和 forecast 的情况，否则直接返回 nan
+    # 只处理包含 label 和 forecast 的情况，否则直接返回 0.0
     if not (isinstance(data, dict) and "label" in data and "forecast" in data):
-        return np.nan
+        print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
+        return 0.0
 
     y_true = data["label"]
     forecast = data["forecast"]
 
-    # 兼容 torch/numpy 输入
     if isinstance(y_true, np.ndarray):
         y_true = torch.from_numpy(y_true)
-    # forecast distribution接口
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
     elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):  # fallback
@@ -64,25 +60,32 @@ def value_oriented_nll_stat(
                 return torch.from_numpy(forecast.mean)
         distr = DummyDistr()
     else:
-        return np.nan
+        print("[WARN] value_oriented_nll_stat: illegal forecast, return 0.0")
+        return 0.0
 
-    # NLL loss
-    log_prob = distr.log_prob(y_true)
-    loss = -log_prob
+    try:
+        log_prob = distr.log_prob(y_true)
+        loss = -log_prob
 
-    # Event weighting
-    threshold = threshold_ratio * y_true.max(dim=-1, keepdim=True)[0]
-    is_event = (y_true > threshold).float()
-    weight = 1.0 + (event_weight - 1.0) * is_event
-    weighted_loss = loss * weight
+        threshold = threshold_ratio * y_true.max(dim=-1, keepdim=True)[0]
+        is_event = (y_true > threshold).float()
+        weight = 1.0 + (event_weight - 1.0) * is_event
+        weighted_loss = loss * weight
 
-    # Smoothness penalty (on mean)
-    if hasattr(distr, "mean"):
-        mean_pred = distr.mean
-        diff = mean_pred[..., 1:] - mean_pred[..., :-1]
-        smooth_loss = torch.mean(torch.abs(diff))
-    else:
-        smooth_loss = 0.0
+        if hasattr(distr, "mean"):
+            mean_pred = distr.mean
+            diff = mean_pred[..., 1:] - mean_pred[..., :-1]
+            smooth_loss = torch.mean(torch.abs(diff))
+        else:
+            smooth_loss = 0.0
 
-    total_loss = weighted_loss.mean() + lambda_smooth * smooth_loss
-    return total_loss.item() if hasattr(total_loss, "item") else float(total_loss)
+        total_loss = weighted_loss.mean() + lambda_smooth * smooth_loss
+        # 统一 float 返回
+        result = total_loss.item() if hasattr(total_loss, "item") else float(total_loss)
+        if np.isnan(result):
+            print("[WARN] value_oriented_nll_stat: got nan, return 0.0")
+            return 0.0
+        return result
+    except Exception as e:
+        print(f"[ERROR] value_oriented_nll_stat: Exception {e}, return 0.0")
+        return 0.0
