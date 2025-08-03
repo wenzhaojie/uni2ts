@@ -30,7 +30,7 @@ class ValueOrientedNLLMetric(BaseMetricDefinition):
                 lambda_smooth=self.lambda_smooth,
                 forecast_type=self.forecast_type,
             ),
-            aggregate=Mean(axis=0),  # 强制聚合第0维，防止axis错
+            aggregate=Mean(axis=0),  # 按第0维聚合，兼容单/多batch
         )
 
 def value_oriented_nll_stat(
@@ -41,20 +41,56 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
-    # 只处理包含 label 和 forecast 的情况，否则直接返回 shape=(1,) 的 0.0
-    if not (isinstance(data, dict) and "label" in data and "forecast" in data):
+    # ==== 适配所有主流输入 ====
+    def print_illegal():
+        if isinstance(data, dict):
+            print("[DEBUG] illegal data keys:", list(data.keys()))
+        else:
+            print("[DEBUG] illegal data type:", type(data))
         print("[WARN] value_oriented_nll_stat: illegal data, return 0.0")
+
+    y_true = None
+    forecast = None
+
+    # 兼容不同key
+    if isinstance(data, dict):
+        if "label" in data:
+            y_true = data["label"]
+        elif "target" in data:
+            y_true = data["target"]
+
+        if "forecast" in data:
+            forecast = data["forecast"]
+        # 点预测模型
+        elif "mean" in data:
+            class DummyDistr:
+                def log_prob(self, x):
+                    mean = torch.from_numpy(data["mean"]) if isinstance(data["mean"], np.ndarray) else torch.as_tensor(data["mean"])
+                    scale = torch.ones_like(mean)  # 假定单位方差
+                    return -0.5 * ((x - mean) / scale) ** 2 - scale.log() - 0.5 * np.log(2 * np.pi)
+                @property
+                def mean(self):
+                    return torch.from_numpy(data["mean"]) if isinstance(data["mean"], np.ndarray) else torch.as_tensor(data["mean"])
+            forecast = type("DummyForecast", (), {"distribution": DummyDistr()})()
+        else:
+            forecast = None
+    else:
+        print_illegal()
         return np.zeros((1,), dtype=np.float32)
 
-    y_true = data["label"]
-    forecast = data["forecast"]
+    if y_true is None or forecast is None:
+        print_illegal()
+        return np.zeros((1,), dtype=np.float32)
 
+    # ==== 到这里，保证 y_true 和 forecast 有效 ====
     if isinstance(y_true, np.ndarray):
         y_true = torch.from_numpy(y_true)
+    distr = None
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
-    elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):  # fallback
-        class DummyDistr:
+    elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):
+        # fallback
+        class DummyDistr2:
             def log_prob(self, x):
                 mean = torch.from_numpy(forecast.mean)
                 scale = torch.from_numpy(forecast.scale)
@@ -62,9 +98,10 @@ def value_oriented_nll_stat(
             @property
             def mean(self):
                 return torch.from_numpy(forecast.mean)
-        distr = DummyDistr()
+        distr = DummyDistr2()
     else:
-        print("[WARN] value_oriented_nll_stat: illegal forecast, return 0.0")
+        print("[DEBUG] forecast has no valid distribution/mean/scale")
+        print_illegal()
         return np.zeros((1,), dtype=np.float32)
 
     try:
