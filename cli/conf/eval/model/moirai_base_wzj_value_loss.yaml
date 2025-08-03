@@ -1,5 +1,5 @@
 _target_: uni2ts.model.moirai.MoiraiForecast.load_from_checkpoint
-checkpoint_path: /home/wzj/GitHubProjects/uni2ts/outputs/pretrain/moirai_base_wzj_value_loss/lotsa_v1_weighted/moirai_base/HF_checkpoints/last
+checkpoint_path: "/home/wzj/GitHubProjects/uni2ts/outputs/pretrain/moirai_base_wzj_value_loss/lotsa_v1_weighted/moirai_base/HF_checkpoints/last"
 num_samples: 100
 patch_size: ???
 context_length: ???
