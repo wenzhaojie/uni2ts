@@ -45,10 +45,9 @@ def value_oriented_nll_stat(
     """
     GluonTS evaluation-style metric: y_true, forecast (distribution object).
     """
-    # 兼容 torch/numpy
+    # 支持 torch/numpy 输入
     if isinstance(y_true, np.ndarray):
         y_true = torch.from_numpy(y_true)
-    # forecast distribution接口
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
     elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):  # fallback
