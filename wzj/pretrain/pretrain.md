@@ -66,7 +66,7 @@ python -m cli.eval \
 
 ```python
 HYDRA_FULL_ERROR=1 python -m cli.eval \
-  run_name=example_base_moirai_small_wzj_value_loss \
+  run_name=example_moirai_base_wzj_value_loss \
   model=moirai_base_wzj_value_loss \
   model.patch_size=32 \
   model.context_length=1000 \
@@ -74,3 +74,57 @@ HYDRA_FULL_ERROR=1 python -m cli.eval \
   data.dataset_name=ETTh1 \
   data.prediction_length=96
 ```
+
+```python
+HYDRA_FULL_ERROR=1 python -m cli.eval \
+  run_name=example_moirai_small_wzj_value_loss \
+  model=moirai_small_wzj_value_loss \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=lsf_test \
+  data.dataset_name=ETTh1 \
+  data.prediction_length=96
+```
+
+
+```python
+HYDRA_FULL_ERROR=1 python -m cli.eval \
+  run_name=example_moirai_small \
+  model=moirai_1.0_R_small \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=lsf_test \
+  data.dataset_name=ETTh1 \
+  data.prediction_length=96
+```
+
+```python
+HYDRA_FULL_ERROR=1 python -m cli.eval \
+  run_name=example_moirai_base \
+  model=moirai_1.0_R_base \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=lsf_test \
+  data.dataset_name=ETTh1 \
+  data.prediction_length=96
+```
+
+
+
+# 结果对比
+```shell
+(uni2ts) wzj@X99:~/GitHubProjects/uni2ts$ HYDRA_FULL_ERROR=1 python -m cli.eval \
+  run_name=example_moirai_base_wzj_value_loss \
+  model=moirai_base_wzj_value_loss \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=lsf_test \
+  data.dataset_name=ETTh1 \
+  data.prediction_length=96
+[2025-08-03 22:06:58,927][datasets][INFO] - PyTorch version 2.4.1 available.
+[2025-08-03 22:06:58,928][datasets][INFO] - JAX version 0.6.1 available.
+19495it [01:20, 240.73it/s]
+      MSE[mean]  MSE[0.5]  MAE[0.5]  MASE[0.5]  MAPE[0.5]  sMAPE[0.5]       MSIS  RMSE[mean]  NRMSE[mean]   ND[0.5]  mean_weighted_sum_quantile_loss
+None   0.731709  0.678317  0.489907   1.140388   8.848048    0.887955  12.694545      0.8554     1.074735  0.615525                         0.501248
+```
+

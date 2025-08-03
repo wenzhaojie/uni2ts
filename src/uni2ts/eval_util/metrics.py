@@ -19,3 +19,5 @@ class MedianMSE(BaseMetricDefinition):
             stat=partial(squared_error, forecast_type=self.forecast_type),
             aggregate=Mean(axis=axis),
         )
+
+
