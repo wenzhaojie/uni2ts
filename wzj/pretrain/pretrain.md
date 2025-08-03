@@ -32,6 +32,16 @@ python -m cli.train \
   train_dataloader.batch_size=256
 ```
 
+# eval
+```python
+python -m cli.eval \
+  run_name=example_eval_moirai_small_wzj_value_loss \
+  model=moirai_small_wzj_value_loss \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=etth1_test
+```
+
 # PackedValueOrientedMAELoss 训练一个base的模型
 ```python
 python -m cli.train \
@@ -45,10 +55,10 @@ python -m cli.train \
 
 # eval
 ```python
-python -m cli.eval \ 
-  run_name=example_eval_1 \ 
-  model=moirai_base_wzj_value_loss \ 
-  model.patch_size=32 \ 
-  model.context_length=1000 \ 
+python -m cli.eval \
+  run_name=example_base_moirai_small_wzj_value_loss \
+  model=moirai_base_wzj_value_loss \
+  model.patch_size=32 \
+  model.context_length=1000 \
   data=etth1_test
 ```
