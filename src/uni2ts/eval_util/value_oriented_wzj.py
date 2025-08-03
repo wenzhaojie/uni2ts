@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from functools import partial
 from typing import Optional
+import collections
 
 import numpy as np
 import torch
@@ -11,10 +12,6 @@ from gluonts.ev.metrics import BaseMetricDefinition, DirectMetric
 
 @dataclass
 class ValueOrientedNLLMetric(BaseMetricDefinition):
-    """
-    Value-oriented weighted NLL loss for evaluation,
-    with event region emphasis and smoothness penalty.
-    """
     event_weight: float = 2.0
     threshold_ratio: float = 0.8
     lambda_smooth: float = 0.1
@@ -30,7 +27,7 @@ class ValueOrientedNLLMetric(BaseMetricDefinition):
                 lambda_smooth=self.lambda_smooth,
                 forecast_type=self.forecast_type,
             ),
-            aggregate=Mean(axis=0),  # 按第0维聚合，兼容单/多batch
+            aggregate=Mean(axis=0),
         )
 
 def value_oriented_nll_stat(
@@ -41,6 +38,9 @@ def value_oriented_nll_stat(
     forecast_type: str = "mean",
     **kwargs
 ):
+    import collections
+    if isinstance(data, collections.ChainMap):
+        data = dict(data)
     # ==== 适配所有主流输入 ====
     def print_illegal():
         if isinstance(data, dict):
@@ -52,7 +52,6 @@ def value_oriented_nll_stat(
     y_true = None
     forecast = None
 
-    # 兼容不同key
     if isinstance(data, dict):
         if "label" in data:
             y_true = data["label"]
@@ -61,12 +60,11 @@ def value_oriented_nll_stat(
 
         if "forecast" in data:
             forecast = data["forecast"]
-        # 点预测模型
         elif "mean" in data:
             class DummyDistr:
                 def log_prob(self, x):
                     mean = torch.from_numpy(data["mean"]) if isinstance(data["mean"], np.ndarray) else torch.as_tensor(data["mean"])
-                    scale = torch.ones_like(mean)  # 假定单位方差
+                    scale = torch.ones_like(mean)
                     return -0.5 * ((x - mean) / scale) ** 2 - scale.log() - 0.5 * np.log(2 * np.pi)
                 @property
                 def mean(self):
@@ -89,7 +87,6 @@ def value_oriented_nll_stat(
     if hasattr(forecast, "distribution") and forecast.distribution is not None:
         distr = forecast.distribution
     elif hasattr(forecast, "mean") and hasattr(forecast, "scale"):
-        # fallback
         class DummyDistr2:
             def log_prob(self, x):
                 mean = torch.from_numpy(forecast.mean)
