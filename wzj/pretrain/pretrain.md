@@ -148,3 +148,18 @@ None   0.446563   0.44115  0.416185   0.967821   8.688899     0.76553  7.96007  
 ```
 
 ## 再看一下自己训练1000步的eval结果
+```shell
+HYDRA_FULL_ERROR=1 python -m cli.eval \
+  run_name=example_moirai_small_wzj_train \
+  model=moirai_small_wzj_train \
+  model.patch_size=32 \
+  model.context_length=1000 \
+  data=lsf_test \
+  data.dataset_name=ETTh1 \
+  data.prediction_length=96
+
+      MSE[mean]  MSE[0.5]  MAE[0.5]  MASE[0.5]  MAPE[0.5]  sMAPE[0.5]      MSIS  RMSE[mean]  NRMSE[mean]   ND[0.5]  mean_weighted_sum_quantile_loss  ValueOrientedNLL[event_weight=2.0,smooth=0.1]
+None   0.417379  0.409425  0.409755   0.953497   8.548131    0.760882  7.599701    0.646049     0.811703  0.514821                         0.411072                                            0.0
+
+
+```
