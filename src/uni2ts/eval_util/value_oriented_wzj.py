@@ -114,6 +114,11 @@ def value_oriented_nll_stat(
       - 若 data 数据不全或分布无效，返回 0.0 并打印 WARN，避免评估中断。
     """
 
+    # 只打印一次
+    if not hasattr(value_oriented_nll_stat, "_peeked"):
+        peek_keys(data)
+        value_oriented_nll_stat._peeked = True
+
     # ---------- 小工具 ----------
     def _to_tensor(x) -> torch.Tensor:
         """将 numpy/标量/张量统一为 torch.float32。"""
