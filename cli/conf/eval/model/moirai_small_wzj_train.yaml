@@ -1,0 +1,6 @@
+_target_: uni2ts.model.moirai.MoiraiForecast.load_from_checkpoint
+checkpoint_path: "/home/wzj/GitHubProjects/uni2ts/outputs/pretrain/moirai_small/lotsa_v1_weighted/moirai_small/checkpoints/last.ckpt"
+num_samples: 100
+patch_size: ???
+context_length: ???
+
