@@ -141,6 +141,9 @@ HYDRA_FULL_ERROR=1 python -m cli.eval \
   data=lsf_test \
   data.dataset_name=ETTh1 \
   data.prediction_length=96
+  
+   MSE[mean]  MSE[0.5]  MAE[0.5]  MASE[0.5]  ...  NRMSE[mean]   ND[0.5]  mean_weighted_sum_quantile_loss  ValueOrientedNLL[event_weight=2.0,smooth=0.1]
+None   0.446051  0.441085  0.416228   0.967923  ...      0.83912  0.522954                         0.420708                                            0.0
 ```
 
 

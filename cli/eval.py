@@ -55,6 +55,17 @@ def main(cfg: DictConfig):
             for name, metric in res.to_dict("records")[0].items():
                 writer.add_scalar(f"{metadata.split}_metrics/{name}", metric)
             writer.close()
+
+            # added by wzj
+            # 另存为 CSV/JSON，便于不用 TensorBoard 直接查看
+            import os, json
+            csv_path = os.path.join(output_dir, "metrics.csv")
+            json_path = os.path.join(output_dir, "metrics.json")
+            res.to_csv(csv_path, index=False)
+            res.to_json(json_path, orient="records", force_ascii=False, indent=2)
+            print(f"[Saved] {csv_path}")
+            print(f"[Saved] {json_path}")
+
             break
         except torch.cuda.OutOfMemoryError:
             print(
