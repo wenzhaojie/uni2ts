@@ -1,250 +1,136 @@
-# -*- coding: utf-8 -*-
-from typing import Optional
 import torch
-from uni2ts.loss.packed import PackedDistributionLoss
+from torch import Tensor
+from jaxtyping import Bool, Float, Int
+from torch.distributions import Distribution
+
+from uni2ts.loss.packed import PackedDistributionLoss  # 如果路径不同，请按你的工程实际调整
 
 
 class PackedValueOrientedNLLLoss(PackedDistributionLoss):
     """
-    面向“关键事件”的分布式时间序列 NLL 损失（Value-oriented NLL）。
-    由三部分组成：
-      1) 基础 NLL：-log p(y | θ)
-      2) 事件区间加权：对超过阈值的高价值点放大权重（可选分位数阈值/最大值比例两种策略）
-      3) 平滑正则：对模型预测均值(或loc)的相邻时间步差分做 L1，鼓励输出更平滑
-
-    关键特性（较原始实现的改进处）：
-      - 事件阈值/平滑项均为“mask 感知”（仅在有效位置上计算）
-      - 有效样本数使用 预测区∩观测区 的交集
-      - 对 pred.log_prob 与 target/mean 的 NaN/Inf 做数值防护，避免训练中断
-      - 阈值策略可切换：'quantile'（默认，鲁棒）或 'ratio_max'（比例×最大值）
+    价值导向的 NLL：
+      - 对“突增点”（|Δtarget| 超过全局分位数阈值）放大 NLL 权重
+      - 加入对 pred.mean 的一阶差分平滑正则 (L2)
+    返回逐点损失 (*batch seq_len #dim)，与 PackedLoss.reduce_loss 完整兼容
     """
 
     def __init__(
         self,
-        lambda_smooth: float = 0.1,         # 平滑正则项的权重 λ
-        event_weight: float = 2.0,          # 事件点的损失放大倍数（>1 表示更重视事件点）
-        threshold_ratio: float = 0.8,       # ratio_max 模式下的阈值比例（thr = ratio * max）
-        event_detector: str = "quantile",   # 'quantile' | 'ratio_max'，事件检测策略
-        event_quantile: float = 0.9,        # quantile 模式下的分位数（如 0.9）
-        time_dim: int = -1,                 # 时间维度索引（一般是 -1）
-        eps: float = 1e-12,                 # 数值稳定用的极小值
+        spike_quantile: float = 0.9,      # 突增阈值分位数（全局）
+        spike_weight: float = 3.0,        # 突增点额外权重 (>1 放大)
+        smooth_lambda: float = 0.1,       # 平滑正则系数 (>=0)
+        apply_only_on_pred_mask: bool = True,  # 突增识别是否仅在预测区间内进行
+        detach_threshold: bool = True,    # 量化阈值计算是否与梯度图断开
+        eps: float = 1e-8,                # 数值稳定项
     ):
         super().__init__()
-        assert event_detector in ("quantile", "ratio_max")
-        self.lambda_smooth = float(lambda_smooth)
-        self.event_weight = float(event_weight)
-        self.threshold_ratio = float(threshold_ratio)
-        self.event_detector = event_detector
-        self.event_quantile = float(event_quantile)
-        self.time_dim = int(time_dim)
-        self.eps = float(eps)
-
-    # ------------------------- 工具函数 -------------------------
-
-    def _to_like(self, x: torch.Tensor, ref: torch.Tensor, as_float: bool = True) -> torch.Tensor:
-        """
-        将张量 x 移到与 ref 相同的 device，且 dtype 设为 ref.dtype（float）或 bool。
-        用于把 mask/数据对齐到 loss 的设备与精度。
-        """
-        dtype = ref.dtype if as_float else torch.bool
-        return x.to(device=ref.device, dtype=dtype)
-
-    def _align_mask(self, mask: Optional[torch.Tensor], ref: torch.Tensor) -> Optional[torch.Tensor]:
-        """
-        将 mask 对齐/广播到与 ref 相同形状。
-        - 返回 float 型 mask（便于与 loss 相乘），取值通常为 0/1。
-        - 若 mask 为 None，则返回 None。
-        """
-        if mask is None:
-            return None
-        # 接受 bool/float；统一转成 float 以便参与乘法
-        mask = self._to_like(mask, ref, as_float=True)
-        # 维度对齐：不足则在末尾补 1 维，超出则去掉多余末维
-        while mask.dim() < ref.dim():
-            mask = mask.unsqueeze(-1)
-        while mask.dim() > ref.dim():
-            mask = mask.squeeze(-1)
-        # 形状不一致则按广播扩展到 ref 的形状
-        if mask.shape != ref.shape:
-            mask = mask.expand_as(ref)
-        return mask
-
-    def _merge_masks(
-        self,
-        pm: Optional[torch.Tensor],
-        om: Optional[torch.Tensor],
-        ref: torch.Tensor,
-    ) -> Optional[torch.Tensor]:
-        """
-        合并 prediction_mask 与 observed_mask：
-          - 两者都有：取交集（AND）
-          - 只有一个：用它
-          - 都没有：返回 None
-        返回 float mask（与 ref 同 device/dtype）。
-        """
-        pm = self._align_mask(pm, ref)
-        om = self._align_mask(om, ref)
-        if pm is not None and om is not None:
-            vm = (pm > 0) & (om > 0)
-            return vm.to(dtype=ref.dtype)
-        if pm is not None:
-            return (pm > 0).to(dtype=ref.dtype)
-        if om is not None:
-            return (om > 0).to(dtype=ref.dtype)
-        return None
-
-    @torch.no_grad()
-    def _to_float_if_needed(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        某些输入（例如 target）可能是整型，后续需要 torch.finfo/nanquantile 等浮点 API。
-        这里确保 x 为浮点类型。
-        """
-        return x if x.is_floating_point() else x.float()
-
-    @torch.no_grad()
-    def _masked_max(self, x: torch.Tensor, mask: Optional[torch.Tensor], dim: int) -> torch.Tensor:
-        """
-        在给定维度 dim 上计算 mask 感知的最大值（keepdim=True）。
-        - 对非浮点/NaN 做防护
-        - mask==0 的位置用 very_small 屏蔽，避免影响最大值
-        """
-        x = self._to_float_if_needed(x)
-        # 将非有限值替换为 0，防止污染 max
-        x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
-        if mask is None:
-            return x.max(dim=dim, keepdim=True).values
-        # 使用 dtype 对应的极小值屏蔽无效位
-        very_small = torch.finfo(x.dtype).min
-        x_masked = torch.where(mask > 0, x, torch.full_like(x, very_small))
-        return x_masked.max(dim=dim, keepdim=True).values
-
-    @torch.no_grad()
-    def _masked_quantile(self, x: torch.Tensor, mask: Optional[torch.Tensor], q: float, dim: int) -> torch.Tensor:
-        """
-        在给定维度 dim 上计算 mask 感知的分位数（keepdim=True）。
-        - 先将无效位置为 NaN，再用 torch.nanquantile 忽略 NaN
-        - 如果该条样本在该维上全是 NaN（全被 mask 掉），结果为 NaN，由调用方兜底
-        """
-        x = self._to_float_if_needed(x)
-        # 将非有限值置为 NaN，便于 nanquantile 忽略
-        x = torch.where(torch.isfinite(x), x, torch.nan)
-        if mask is not None:
-            x = torch.where(mask > 0, x, torch.nan)
-        return torch.nanquantile(x, q, dim=dim, keepdim=True)
-
-    def _get_pred_mean(self, pred) -> Optional[torch.Tensor]:
-        """
-        尽力从 pred 中获取“预测均值”的张量：
-          - 优先使用 pred.mean
-          - 否则尝试 pred.loc（部分分布以 loc 表示位置参数）
-        若均无可用，返回 None（平滑项将跳过）。
-        """
-        mean = getattr(pred, "mean", None)
-        if isinstance(mean, torch.Tensor):
-            return mean
-        loc = getattr(pred, "loc", None)
-        if isinstance(loc, torch.Tensor):
-            return loc
-        return None
-
-    # ------------------------- 核心损失计算 -------------------------
+        assert 0.0 < spike_quantile < 1.0, "spike_quantile must be in (0,1)"
+        assert spike_weight >= 1.0, "spike_weight should be >= 1.0"
+        assert smooth_lambda >= 0.0, "smooth_lambda should be >= 0.0"
+        self.spike_quantile = spike_quantile
+        self.spike_weight = spike_weight
+        self.smooth_lambda = smooth_lambda
+        self.apply_only_on_pred_mask = apply_only_on_pred_mask
+        self.detach_threshold = detach_threshold
+        self.eps = eps
 
     def _loss_func(
         self,
-        pred,                              # 分布对象（必须实现 .log_prob(target)，可选 .mean / .loc）
-        target: torch.Tensor,              # 目标值，形状与 pred.log_prob 输出一致（通常是 [..., T]）
-        prediction_mask: Optional[torch.Tensor] = None,  # 预测区掩码（1=有效，0=无效）
-        observed_mask: Optional[torch.Tensor] = None,    # 观测区掩码（1=有效，0=无效）
-        sample_id=None,                    # 兼容基类签名（未使用）
-        variate_id=None,                   # 兼容基类签名（未使用）
-        **kwargs,
-    ) -> torch.Tensor:
-        # 1) 基础逐点 NLL：loss_point = -log p(y | θ)
-        nll = -pred.log_prob(target)  # 形状与 target 一致
-        # 对可能出现的非有限值做防护（如分布与 target 域不匹配导致的 inf/-inf）
-        nll = torch.where(torch.isfinite(nll), nll, torch.zeros_like(nll))
+        pred: Distribution,
+        target: Float[Tensor, "*batch seq_len #dim"],
+        prediction_mask: Bool[Tensor, "*batch seq_len"],
+        observed_mask: Bool[Tensor, "*batch seq_len #dim"],
+        sample_id: Int[Tensor, "*batch seq_len"],
+        variate_id: Int[Tensor, "*batch seq_len"],
+    ) -> Float[Tensor, "*batch seq_len #dim"]:
+        device = target.device
+        # -------------------------
+        # 1) 基础 NLL (逐点)
+        # -------------------------
+        base_nll = -pred.log_prob(target)  # 形状: *batch seq_len #dim
+        # 避免极端分布返回 inf/NaN
+        base_nll = torch.nan_to_num(base_nll, nan=0.0, posinf=1e6, neginf=0.0)
 
-        # 2) 合成有效位：prediction_mask ∩ observed_mask（若同时存在）
-        valid_mask = self._merge_masks(prediction_mask, observed_mask, nll)
+        # -------------------------
+        # 2) 突增点识别与加权
+        #    使用 target 的一阶差分 |Δy_t|，把 Δ 归到“当前时刻 t”
+        # -------------------------
+        seq_dim = -2  # 约定: 倒数第二维是 seq_len，最后一维是 #dim
+        # 有效观测的成对掩码：t 与 t-1 都有观测（逐维）
+        obs_t = observed_mask
+        obs_tm1 = torch.zeros_like(obs_t)
+        obs_tm1[..., 1:, :] = obs_t[..., :-1, :]
+        pair_obs_mask = obs_t & obs_tm1  # *batch seq_len #dim, t=0 处为 False
 
-        # 3) 事件阈值（mask 感知）
-        if self.event_detector == "quantile":
-            # 分位数阈值，更鲁棒：thr = Q_q(target | valid)
-            thr = self._masked_quantile(target, valid_mask, self.event_quantile, dim=self.time_dim)
-            # 若全无有效点导致 thr=NaN，则回退到 ratio_max 逻辑
-            fallback = self.threshold_ratio * self._masked_max(target, valid_mask, dim=self.time_dim)
-            thr = torch.where(torch.isfinite(thr), thr, fallback)
-        else:  # 'ratio_max'：thr = ratio * max(target | valid)
-            mx = self._masked_max(target, valid_mask, dim=self.time_dim)
-            thr = self.threshold_ratio * mx
+        # 若只在预测区间内寻找突增，额外与 pred_mask 相交
+        if self.apply_only_on_pred_mask:
+            pred_mask_exp = prediction_mask.unsqueeze(-1).expand_as(target)
+            pred_mask_tm1 = torch.zeros_like(pred_mask_exp)
+            pred_mask_tm1[..., 1:, :] = pred_mask_exp[..., :-1, :]
+            pair_obs_mask = pair_obs_mask & pred_mask_exp & pred_mask_tm1
 
-        # 4) 事件加权：事件点权重为 event_weight，其余为 1
-        is_event = (target > thr).to(dtype=nll.dtype)
-        weight = 1.0 + (self.event_weight - 1.0) * is_event
+        # 计算 |Δtarget_t|，t=0 处填 0
+        delta = torch.zeros_like(target)
+        delta[..., 1:, :] = (target[..., 1:, :] - target[..., :-1, :]).abs()
 
-        loss = nll * weight
-        if valid_mask is not None:
-            loss = loss * valid_mask  # 屏蔽无效位置
-
-        # 5) 归一化：按有效元素个数求平均
-        if valid_mask is None:
-            valid_count = torch.tensor(loss.numel(), device=loss.device, dtype=loss.dtype)
-        else:
-            valid_count = valid_mask.sum()
-
-        # 若无任何有效元素，返回 0.0，避免评估器/回调出现“非法数据”告警
-        if (valid_count <= 0).item():
-            return loss.sum() * 0.0
-
-        value_loss = loss.sum() / (valid_count + self.eps)
-
-        # 6) 平滑正则：对预测的“均值轨迹”做一阶差分 L1（同样仅在有效相邻对上计算）
-        smooth_loss = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
-        mean = self._get_pred_mean(pred)
-        if isinstance(mean, torch.Tensor):
-            # 数值防护
-            mean = torch.where(torch.isfinite(mean), mean, torch.zeros_like(mean))
-
-            # 在 time_dim 上做相邻差分：mean[..., t] - mean[..., t-1]
-            # 这里用 index_select 避免对不定 time_dim 进行复杂切片
-            idx_t   = torch.arange(1, mean.size(self.time_dim), device=mean.device)
-            idx_tm1 = torch.arange(0, mean.size(self.time_dim) - 1, device=mean.device)
-            diff = mean.index_select(self.time_dim, idx_t) - mean.index_select(self.time_dim, idx_tm1)
-
-            if valid_mask is not None:
-                # 仅当 (t 与 t-1) 两个位置均有效时才计入平滑项
-                vm_t   = valid_mask.index_select(self.time_dim, idx_t)
-                vm_tm1 = valid_mask.index_select(self.time_dim, idx_tm1)
-                pair_mask = (vm_t > 0) & (vm_tm1 > 0)
-                pair_count = pair_mask.sum()
-                if (pair_count > 0).item():
-                    smooth_loss = (torch.abs(diff) * pair_mask.to(diff.dtype)).sum() / (pair_count + self.eps)
-                else:
-                    smooth_loss = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+        # 只用有效对的 delta 值计算全局分位数阈值
+        valid_delta = delta[pair_obs_mask]
+        if valid_delta.numel() > 0:
+            if self.detach_threshold:
+                thresh = torch.quantile(valid_delta.detach(), self.spike_quantile)
             else:
-                smooth_loss = torch.mean(torch.abs(diff))
+                thresh = torch.quantile(valid_delta, self.spike_quantile)
+        else:
+            # 没有有效对，阈值置为 +∞（即不加权）
+            thresh = torch.tensor(float("inf"), device=device, dtype=target.dtype)
 
-        # 7) 总损失：value_loss + λ * smooth_loss
-        total_loss = value_loss + self.lambda_smooth * smooth_loss
-        # 再次数值防护，确保返回有限标量
-        total_loss = torch.where(torch.isfinite(total_loss), total_loss, torch.zeros_like(total_loss))
-        return total_loss
+        # spike_mask：当前时刻 t 的 |Δy_t| 是否超过阈值（且满足 pair_obs_mask）
+        spike_mask = (delta > thresh) & pair_obs_mask  # *batch seq_len #dim
 
+        # 构造逐点权重
+        spike_w = torch.ones_like(base_nll)
+        spike_w = spike_w + (self.spike_weight - 1.0) * spike_mask.to(base_nll.dtype)
 
-# ==========================
-# （可选）使用示例（仅注释示意）
-# ==========================
-# loss_fn = PackedValueOrientedNLLLoss(
-#     lambda_smooth=0.1,
-#     event_weight=2.0,
-#     event_detector="quantile",   # 或 "ratio_max"
-#     event_quantile=0.9,
-#     threshold_ratio=0.8,
-#     time_dim=-1,
-# )
-# total_loss = loss_fn._loss_func(
-#     pred=pred_dist,                # 来自模型的分布对象（需实现 .log_prob，最好有 .mean 或 .loc）
-#     target=target_tensor,          # [..., T]
-#     prediction_mask=pred_mask,     # 可为 None
-#     observed_mask=obs_mask,        # 可为 None
-# )
+        # -------------------------
+        # 3) 平滑正则（分布均值的 TV-L2： (μ_t - μ_{t-1})^2 ）
+        #    将对 (t,t-1) 的惩罚平均分摊回两个时刻，使其成为“逐点”项
+        # -------------------------
+        reg_per_token = torch.zeros_like(base_nll)
+        if self.smooth_lambda > 0.0:
+            # 预测均值：与 target 同形状
+            mu = pred.mean
+            mu = torch.nan_to_num(mu, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # 计算 μ 的一阶差分
+            dmu = torch.zeros_like(mu)
+            dmu[..., 1:, :] = mu[..., 1:, :] - mu[..., :-1, :]
+
+            # 平滑正则的成对掩码：只在“预测∧观测”的配对上生效
+            pred_mask_exp = prediction_mask.unsqueeze(-1).expand_as(mu)
+            pred_mask_tm1 = torch.zeros_like(pred_mask_exp)
+            pred_mask_tm1[..., 1:, :] = pred_mask_exp[..., :-1, :]
+
+            # 需要两个时刻都在“预测区”且两个点都有观测
+            pair_mask_reg = (
+                pred_mask_exp
+                & pred_mask_tm1
+                & obs_t
+                & obs_tm1
+            )
+
+            # 逐对的正则值 (t>0 处)：(μ_t - μ_{t-1})^2
+            reg_pair = (dmu ** 2) * pair_mask_reg.to(mu.dtype)
+
+            # 把每一对的正则值平摊到 t 与 t-1 两个时刻上（各 1/2）
+            # 注意：对 t=0，没有对，因此不加
+            half = 0.5 * self.smooth_lambda
+            # 加到 t 位置
+            reg_per_token[..., 1:, :] += half * reg_pair[..., 1:, :]
+            # 加到 t-1 位置
+            reg_per_token[..., :-1, :] += half * reg_pair[..., 1:, :]
+
+        # -------------------------
+        # 4) 合成总逐点损失：加权 NLL + 平滑正则
+        # -------------------------
+        loss = base_nll * spike_w + reg_per_token
+        return loss
